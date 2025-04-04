@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DogeUSDT Price Tracker with Telegram Alerts</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background-color: #2d2d2d;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 400px;
+        }
+
+        .price-box {
+            font-size: 2rem;
+            margin: 1rem 0;
+            padding: 1rem;
+            background-color: #3d3d3d;
+            border-radius: 8px;
+            transition: background-color 0.3s ease;
+        }
+
+        .green { color: #4CAF50; }
+        .red { color: #F44336; }
+
+        .candle-status {
+            font-size: 1.2rem;
+            margin: 1rem 0;
+            padding: 1rem;
+            border-radius: 8px;
+            transition: background-color 0.3s ease;
+        }
+
+        .green-candle { background-color: #4CAF50; }
+        .red-candle { background-color: #F44336; }
+
+        .loading {
+            display: none;
+            font-size: 1.2rem;
+            margin: 1rem 0;
+        }
+
+        button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 5px;
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        .error {
+            color: #F44336 ;
+            margin: 1rem 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DogeUSDT Price Tracker</h1>
+        <div id="loading" class="loading">Loading...</div>
+        <div id="price" class="price-box">Price: $0.00</div>
+        <div id="candleStatus" class="candle-status">Candle Status: N/A</div>
+        <div id="timestamp">Last updated: N/A</div>
+        <div id="candleHistory"></div>
+        <div id="error" class="error"></div>
+    </div>
+
+    <script>
+        const apiEndpoint = 'wss://stream.binance.com:9443/ws/dogeusdt@kline_1m';
+        const priceElement = document.getElementById('price');
+        const loadingElement = document.getElementById('loading');
+        const errorElement = document.getElementById('error');
+        const timestampElement = document.getElementById('timestamp');
+        const candleStatusElement = document.getElementById('candleStatus');
+        const candleHistoryElement = document.getElementById('candleHistory');
+
+        // Telegram Bot Token and Chat ID
+        const telegramBotToken = '7753958625:AAGgRSZSZQJ-6FvhTAsCOCUJfJZFOB01HJ8'; // Replace with your bot token
+        const telegramChatId = '6653752188'; // Replace with your chat ID
+
+        let previousPrice = null;
+        let previousClose = null;
+        let currentCandle = {};
+        let candleHistory = [];
+
+        const socket = new WebSocket(apiEndpoint);
+
+        // Show loading state initially
+        loadingElement.style.display = 'block';
+
+        socket.onopen = function() {
+            loadingElement.style.display = 'none';
+        };
+
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const kline = data.k;
+
+            // Update current price in real-time
+            const currentPrice = parseFloat(kline.c);
+            updatePrice(currentPrice);
+
+            // Store candle data
+            currentCandle = {
+                open: parseFloat(kline.o),
+                close: currentPrice,
+                time: new Date(kline.t),
+                isClosed: kline.x
+            };
+
+            // Update candle status when closed
+            if (kline.x) {
+                checkCandle(currentCandle.open, currentCandle.close, currentCandle.time);
+            }
+        };
+
+        socket.onerror = function(error) {
+            errorElement.textContent = 'WebSocket error: ' + error.message;
+            loadingElement.style.display = 'none';
+        };
+
+        socket.onclose = function() {
+            errorElement.textContent = 'Connection closed. Reconnecting...';
+            setTimeout(connectWebSocket, 5000);
+        };
+
+        function updatePrice(price) {
+            const formattedPrice = price.toFixed(6);
+            const priceChange = previousPrice !== null 
+                ? (price - previousPrice).toFixed(6)
+                : 0;
+
+            priceElement.innerHTML = `$${formattedPrice}`;
+            
+            if (previousPrice !== null) {
+                priceElement.className = price > previousPrice ? 'price-box green' : 'price-box red';
+                priceElement.innerHTML += `<span class="price-change">(${priceChange > 0 ? '+' : ''}${priceChange})</span>`;
+            } else {
+                priceElement.className = 'price-box';
+            }
+            previousPrice = price;
+            timestampElement.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+        }
+
+        function checkCandle(open, close, candleTime) {
+            if (close > open) {
+                candleStatusElement.textContent = `Candle Status: Green at ${candleTime.toLocaleTimeString()}`;
+                candleStatusElement.className = 'candle-status green-candle';
+                addCandleToHistory('Green', candleTime);
+                sendTelegramMessage(`Green Candle closed at ${close} on ${candleTime.toLocaleString()}`);
+            } else {
+                candleStatusElement.textContent = `Candle Status: Red at ${candleTime.toLocaleTimeString()}`;
+                candleStatusElement.className = 'candle-status red-candle';
+                addCandleToHistory('Red', candleTime);
+                sendTelegramMessage(`Red Candle closed at ${close} on ${candleTime.toLocaleString()}`);
+            }
+            previousClose = close; // Update previous close price
+        }
+
+        function addCandleToHistory(status, time) {
+            candleHistory.push({ status, time });
+            // Optionally update the UI to show candle history
+            candleHistoryElement.innerHTML += `<div>${status} Candle at ${time.toLocaleTimeString()}</div>`;
+        }
+
+        function sendTelegramMessage(message) {
+            const url = `https://api.telegram.org/bot${telegramBotToken}/sendMessage`;
+            const params = {
+                chat_id: telegramChatId,
+                text: message,
+                parse_mode: 'HTML'
+            };
+
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(params)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+            })
+            .catch(error => {
+                console.error('Error sending message to Telegram:', error);
+            });
+        }
+
+        function connectWebSocket() {
+            // Reconnect logic
+            const newSocket = new WebSocket(apiEndpoint);
+            newSocket.onopen = socket.onopen;
+            newSocket.onmessage = socket.onmessage;
+            newSocket.onerror = socket.onerror;
+            newSocket.onclose = socket.onclose;
+        }
+    </script>
+</body>
+</html>
